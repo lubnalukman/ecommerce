@@ -1,6 +1,13 @@
 from django.shortcuts import render
-from rest_framework import viewsets
+from rest_framework import viewsets,permissions,generics, serializers
+from .serializers import  UserSigninSerializer
 from .serializers import *
+from rest_framework.views import APIView
+from rest_framework.permissions import AllowAny,IsAuthenticated
+from django.contrib.auth.models import User
+from django.contrib.auth import authenticate
+from django.shortcuts import redirect, render
+
 
 class CompanyViewSet(viewsets.ModelViewSet):
     serializer_class = CompanySerializer
@@ -37,3 +44,20 @@ class CartViewSet(viewsets.ModelViewSet):
 class CartItemViewSet(viewsets.ModelViewSet):
     serializer_class = CartItemSerializer
     queryset=CartItem.objects.all()
+
+
+
+class UserSigninView(APIView):
+    def post(self, request, *args, **kwargs):
+        serializer = UserSigninSerializer(data=request.data)
+        if serializer.is_valid():
+            user = serializer.validated_data['user']
+
+            if user.is_superuser:
+                return redirect('/admin/home/')  # Redirect to admin page
+            elif user.userprofile.user_type == 'seller':
+                return redirect('/seller/home/')  # Redirect to seller home
+            else:
+                return redirect('/customer/home/')  # Redirect to customer home
+
+        return render(request, 'signin.html', {'errors': serializer.errors})
