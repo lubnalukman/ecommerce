@@ -11,22 +11,27 @@ class UserSerializer(serializers.ModelSerializer):
 class UserSignupSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True)
     confirm_password = serializers.CharField(write_only=True)
-    is_seller = serializers.ChoiceField(choices=[('buy', 'Buy'), ('sell', 'Sell')], write_only=True, required=True)
+    user_type = serializers.ChoiceField(choices=[('buyer', 'Buyer'), ('seller', 'Seller')], write_only=True, required=True)
     class Meta:
         model = User
-        fields = ['username', 'email', 'password', 'confirm_password', 'is_seller']
+        fields = ['username', 'email', 'password', 'confirm_password', 'user_type']
     def validate(self, data):
         if data['password'] != data['confirm_password']:
             raise serializers.ValidationError({"confirm_password": "Passwords do not match."})
         return data
     def create(self, validated_data):
-        validated_data.pop('confirm_password')    
-        user = User(
+        validated_data.pop('confirm_password') 
+        user_type = validated_data.pop('user_type')   
+        user = User.objects.create_user(
             username=validated_data['username'],
             email=validated_data['email']
         )
         user.set_password(validated_data['password'])
         user.save()
+        if user_type == 'seller':
+            Company.objects.create(user=user)
+        elif user_type == 'buyer':
+            Customer.objects.create(user=user)
         return user
     
 class UserSigninSerializer(serializers.Serializer):

@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Signup Page</title>
+</head>
+<body>
+    <h1>Signup</h1>
+
+    <!-- Display API Response -->
+    {% if response %}
+        <p>API Response: {{ response }}</p>
+    {% else %}
+        <p>No data available from the API.</p>
+    {% endif %}
+
+    <!-- Signup Form -->
+    <form method="POST" action="signup/">
+        <!-- Your form fields here -->
+        <button type="submit">Sign Up</button>
+    </form>
+</body>
+</html>
