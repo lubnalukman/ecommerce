@@ -8,52 +8,74 @@ class UserSerializer(serializers.ModelSerializer):
         model = User
         fields = ['id', 'username', 'email']
 
-class UserSignupSerializer(serializers.ModelSerializer):
-    password = serializers.CharField(write_only=True)
+class CompanySignupSerializer(serializers.Serializer):
+    user = UserSerializer(write_only=True)
+    password=serializers.CharField(write_only=True)
     confirm_password = serializers.CharField(write_only=True)
-    user_type = serializers.ChoiceField(choices=[('buyer', 'Buyer'), ('seller', 'Seller')], write_only=True, required=True)
-    class Meta:
-        model = User
-        fields = ['username', 'email', 'password', 'confirm_password', 'user_type']
+    name = serializers.CharField(max_length=255)
+    address = serializers.CharField()
+    phone_number = serializers.CharField(max_length=20)
+    website = serializers.URLField(required=False)
+
     def validate(self, data):
         if data['password'] != data['confirm_password']:
             raise serializers.ValidationError({"confirm_password": "Passwords do not match."})
         return data
+
     def create(self, validated_data):
-        validated_data.pop('confirm_password') 
-        user_type = validated_data.pop('user_type')   
+        validated_data.pop('confirm_password')
+        user_data = validated_data.pop('user')
         user = User.objects.create_user(
-            username=validated_data['username'],
-            email=validated_data['email']
+            username=user_data['username'],
+            email=user_data['email'],
+            password=validated_data.pop('password')
         )
-        user.set_password(validated_data['password'])
-        user.save()
-        if user_type == 'seller':
-            Company.objects.create(user=user)
-        elif user_type == 'buyer':
-            Customer.objects.create(user=user)
+        company = Company.objects.create(user=user, **validated_data)
         return user
-    
-class UserSigninSerializer(serializers.Serializer):
-    username = serializers.CharField()
-    password = serializers.CharField(write_only=True)
+
+class CustomerSignupSerializer(serializers.Serializer):
+    user = UserSerializer(write_only=True)
+    password=serializers.CharField(write_only=True)
+    confirm_password = serializers.CharField(write_only=True)
+    address = serializers.CharField()
+    phone_number = serializers.CharField(max_length=20)
+
     def validate(self, data):
-        username = data.get('username')
-        password = data.get('password')
+        if data['password'] != data['confirm_password']:
+            raise serializers.ValidationError({"confirm_password": "Passwords do not match."})
+        return data
+
+    def create(self, validated_data):
+        validated_data.pop('confirm_password')
+        user_data = validated_data.pop('user')
+        user = User.objects.create_user(
+            username=user_data['username'],
+            email=user_data['email'],
+            password=validated_data.pop('password')
+        )
+        customer = Customer.objects.create(user=user, **validated_data)
+        return user
+
+class LoginSerializer(serializers.Serializer):
+    username = serializers.CharField(required=True)
+    password = serializers.CharField(write_only=True, required=True)
+
+    def validate(self, data):
+        username = data.get("username")
+        password = data.get("password")
         user = authenticate(username=username, password=password)
         if user is None:
             raise serializers.ValidationError("Invalid username or password.")
         if not user.is_active:
-            raise serializers.ValidationError("User account is inactive.")
-        data['user'] = user
-        return data
+            raise serializers.ValidationError("User account is deactivated.")
+        return {'user': user}  # Return the user object
 
 class CompanySerializer(serializers.ModelSerializer):
     user = UserSerializer(read_only=True)
     class Meta:
         model=Company
         fields='__all__'
-        read_only_fields=['id','verification_status']
+        read_only_fields=['id']
 
 class CustomerSerializer(serializers.ModelSerializer):
     user = UserSerializer(read_only=True)
@@ -76,12 +98,13 @@ class CategorySerializer(serializers.ModelSerializer):
      
 
 class ProductSerializer(serializers.ModelSerializer):
-    company = CompanySerializer(read_only=True)
-    sizes = SizeSerializer(many=True, read_only=True)
-    category = CategorySerializer(read_only=True)
+    company_name = serializers.CharField(source='company.name', read_only=True)
+    sizes = serializers.StringRelatedField(many=True, read_only=True) 
+
     class Meta:
-        model=Product
-        fields='__all__'
+        model = Product
+        fields = ['id', 'name', 'price', 'company_name', 'sizes']
+
        
 class OrderItemSerializer(serializers.ModelSerializer):
     product = ProductSerializer(read_only=True)
@@ -101,11 +124,11 @@ class OrderSerializer(serializers.ModelSerializer):
 
 class CartItemSerializer(serializers.ModelSerializer):
     product = ProductSerializer(read_only=True)
+    size = SizeSerializer(read_only=True) 
 
     class Meta:
         model = CartItem
-        fields = '__all__'
-        read_only_fields = ['id']
+        fields = ['product', 'quantity', 'size'] 
                            
 class CartSerializer(serializers.ModelSerializer):
     customer=CustomerSerializer(read_only=True)
@@ -113,8 +136,8 @@ class CartSerializer(serializers.ModelSerializer):
     
     class Meta:
         model=Cart
-        fields = '__all__'
-        read_only_fields = ['id']
+        fields = ['customer', 'items']
+        
 
 
 
