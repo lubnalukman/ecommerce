@@ -1,5 +1,5 @@
 from django.shortcuts import render
-from rest_framework import viewsets,permissions,generics, serializers,status
+from rest_framework import viewsets,permissions,generics, serializers,status,filters
 from .serializers import  LoginSerializer
 from .serializers import *
 from rest_framework.views import APIView
@@ -19,11 +19,59 @@ from rest_framework.decorators import action
 from django.shortcuts import get_object_or_404
 from .models import Company, Category, Product, Size, Order, OrderItem
 from rest_framework import permissions
+from django_filters.rest_framework import DjangoFilterBackend
+import django_filters
 
-class IsAdminUser(permissions.BasePermission):
-    def has_permission(self, request, view):
-        return request.user and request.user.is_superuser
+class AdminDashboardView(APIView):
+    def get(self, request):
+        if not (request.user and request.user.is_superuser):
+            return Response(
+                {"error": "You do not have permission to access this resource."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        return Response({
+            "message": "Welcome to the admin dashboard.",
+            "endpoints": {
+                "companies": "/admin/companies/",
+                "customers": "/admin/customers/",
+                "products": "/admin/products/",
+                "orders": "/admin/orders/",
+            }
+        }, status=status.HTTP_200_OK)
 
+class CustomerDashboardView(APIView):
+    def get(self, request):
+        if not self.request.user.is_authenticated and hasattr(self.request.user, 'customer'):
+            return Response(
+                {"error": "You do not have permission to access this resource."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        return Response({
+            "message": "Welcome to the Customer dashboard.",
+            "endpoints": {
+                "products": "/api/customer-products/",
+                "cart": "/api/carts/",
+                "orders": "/api/orders/",
+            }
+        }, status=status.HTTP_200_OK)
+    
+class CompanyDashboardView(APIView):
+    def get(self, request):
+        if  notself.request.user.is_authenticated and hasattr(self.request.user, 'company'):
+            return Response(
+                {"error": "You do not have permission to access this resource."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        return Response({
+            "message": "Welcome to the Company dashboard.",
+            "endpoints": {
+                "products": "/api/products/",
+                "orders": "/api/orders/",
+                "categories": "/api/categories/",
+                "sizes": "/api/sizes/"
+            }
+        }, status=status.HTTP_200_OK)
+    
 class CompanyAdminViewSet(viewsets.ModelViewSet):
     serializer_class = CompanySerializer
     queryset = Company.objects.all()
@@ -37,13 +85,18 @@ class CompanyAdminViewSet(viewsets.ModelViewSet):
         return Response({"status": "Company verified successfully"})
 
 class CustomerAdminViewSet(viewsets.ReadOnlyModelViewSet):
-    serializer_class = CustomerSerializer
+    serializer_class = CustomerSignupSerializer
     queryset = Customer.objects.all()
     permission_classes = [IsAdminUser]
 
 class ProductAdminViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = ProductSerializer
     queryset = Product.objects.all()
+    permission_classes = [IsAdminUser]
+
+class OrderAdminViewSet(viewsets.ReadOnlyModelViewSet):
+    serializer_class = OrderSerializer
+    queryset = Order.objects.all()
     permission_classes = [IsAdminUser]
 
 class CompanyViewSet(viewsets.ModelViewSet):  
@@ -57,18 +110,23 @@ class CompanyViewSet(viewsets.ModelViewSet):
         return super().get_permissions()
 
     @action(detail=True, methods=['get'])
-    def orders(self, request, pk=None):
+    def orders_with_items(self, request, pk=None):
         company = self.get_object()
         orders = Order.objects.filter(items__product__company=company).distinct()
-        serializer = OrderSerializer(orders, many=True)
-        return Response(serializer.data)
-
-    @action(detail=True, methods=['get'])
-    def order_items(self, request, pk=None):
-        company = self.get_object()
-        order_items = OrderItem.objects.filter(product__company=company)
-        serializer = OrderItemSerializer(order_items, many=True)
-        return Response(serializer.data)
+        data = [
+            {
+                "order_id": order.id,
+                "customer": order.customer.user.get_full_name(),
+                "status": order.status,
+                "items": [
+                    {
+                        "product": item.product.name,
+                        "quantity": item.quantity
+                    } for item in order.items.all()
+                ]
+            } for order in orders
+        ]
+        return Response(data)
 
     @action(detail=True, methods=['get'])
     def customer_details(self, request, pk=None):
@@ -84,36 +142,67 @@ class CompanyViewSet(viewsets.ModelViewSet):
         ]
         return Response(customer_details)
 
-    @action(detail=True, methods=['patch'], url_path='update-shipping-status')
-    def update_shipping_status(self, request, pk=None):
+    @action(detail=True, methods=['patch'], url_path='update-order-status')
+    def update_order_status(self, request, pk=None):
         company = self.get_object()
-        order = get_object_or_404(Order, pk=request.data.get("order_id"))
-        if not any(item.product.company == company for item in order.items.all()):
-            return Response({"detail": "You can only update orders for products from your company."},
-                            status=status.HTTP_403_FORBIDDEN)
+        try:
+            order = Order.objects.get(pk=request.data.get("order_id"), items__product__company=company)
+        except Order.DoesNotExist:
+            return Response({"error": "Order not found or not associated with this company."}, status=status.HTTP_404_NOT_FOUND)
 
-        new_status = request.data.get("status")
+        new_status = request.data.get('status')
         if new_status not in ['Pending', 'Shipped', 'Delivered', 'Cancelled']:
-            return Response(
-                {"detail": "Invalid status provided"},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
+            return Response({"error": "Invalid status provided."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if new_status == "Shipped":
+            for item in order.items.all():
+                if item.product.stock < item.quantity:
+                    return Response({
+                        "error": f"Insufficient stock for product '{item.product.name}'."
+                    }, status=status.HTTP_400_BAD_REQUEST)
+                item.product.stock -= item.quantity
+                item.product.save()
+
         order.status = new_status
         order.save()
-        return Response({"status": order.status})
+        return Response({
+            "status": "Order status updated successfully.",
+            "order_id": order.id,
+            "new_status": order.status
+        }, status=status.HTTP_200_OK)
+    
+class ProductFilter(django_filters.FilterSet):
+    price_min = django_filters.NumberFilter(field_name="price", lookup_expr='gte')
+    price_max = django_filters.NumberFilter(field_name="price", lookup_expr='lte')
 
+    class Meta:
+        model = Product
+        fields = ['category', 'price_min', 'price_max']
 
 class ProductViewSet(viewsets.ModelViewSet):
     serializer_class = ProductSerializer
     queryset = Product.objects.all()
+    filter_backends = [filters.SearchFilter, DjangoFilterBackend]
+    search_fields = ['name', 'category__name']
+    filterset_class = ProductFilter
+    permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        if self.request.user.is_authenticated and hasattr(self.request.user, 'company'):
-            return Product.objects.filter(company__user=self.request.user)
+        if self.request.user.is_authenticated:
+            # Check if the user has an associated company
+            if hasattr(self.request.user, 'company'):
+                return Product.objects.filter(company=self.request.user.company)
+            else:
+                raise PermissionDenied("You must have a company associated with your account to add products.")
         return Product.objects.none()
 
     def perform_create(self, serializer):
+        if not self.request.user.is_authenticated:
+            raise PermissionDenied("You must be logged in to add a product.")
+        
+        if not hasattr(self.request.user, 'company'):
+            raise PermissionDenied("You must have a company associated with your account to add products.")
+        
         company = self.request.user.company
         if not company.verification_status:
             raise PermissionDenied("Your account is not yet verified by the admin.")
@@ -127,7 +216,6 @@ class CategoryViewSet(viewsets.ModelViewSet):
             return Category.objects.filter(product__company__user=self.request.user)
         return Category.objects.none()
     
-
 class SizeViewSet(viewsets.ModelViewSet):
     serializer_class = SizeSerializer
     queryset = Size.objects.all()
@@ -135,42 +223,6 @@ class SizeViewSet(viewsets.ModelViewSet):
         if self.request.user.is_authenticated and hasattr(self.request.user, 'company'):
             return Size.objects.filter(product__company__user=self.request.user)
         return Size.objects.none()
-
-class OrderViewSet(viewsets.ReadOnlyModelViewSet):
-    serializer_class = OrderSerializer
-    queryset = Order.objects.all()
-
-    def get_queryset(self):
-        if self.request.user.is_authenticated and hasattr(self.request.user, 'company'):
-            return Order.objects.filter(items__product__company__user=self.request.user).distinct()
-        return Order.objects.none()
-    
-class OrderItemViewSet(viewsets.ModelViewSet):
-    serializer_class = OrderItemSerializer
-    queryset = OrderItem.objects.all()
-
-    def get_queryset(self):
-       
-        if self.request.user.is_authenticated and hasattr(self.request.user, 'company'):
-            return OrderItem.objects.filter(product__company__user=self.request.user)
-        return OrderItem.objects.none()
-
-    @action(detail=True, methods=['get'], url_path='order-details')
-    def order_details(self, request, pk=None):
-        order_item = self.get_object()
-        order = order_item.order
-        serializer = OrderSerializer(order)
-        return Response(serializer.data)
-
-    @action(detail=True, methods=['patch'], url_path='update-quantity')
-    def update_quantity(self, request, pk=None):
-        order_item = self.get_object()
-        new_quantity = request.data.get("quantity")
-        if new_quantity and isinstance(new_quantity, int) and new_quantity > 0:
-            order_item.quantity = new_quantity
-            order_item.save()
-            return Response({"quantity": order_item.quantity})
-        return Response({"detail": "Invalid quantity provided"}, status=status.HTTP_400_BAD_REQUEST)
 
 class CustomerViewSet(viewsets.ModelViewSet):
     serializer_class = CustomerSerializer
@@ -222,7 +274,62 @@ class ProductCustomerViewSet(viewsets.ReadOnlyModelViewSet):
             "quantity": cart_item.quantity
         }, status=status.HTTP_200_OK)
 
-class CartViewSet(viewsets.ViewSet):
+class OrderViewSet(viewsets.ModelViewSet): 
+    serializer_class = OrderSerializer
+    queryset = Order.objects.all()
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        if hasattr(user, 'company'):  
+            return Order.objects.filter(items__product__company__user=user).distinct()
+        elif hasattr(user, 'customer'): 
+            return Order.objects.filter(customer__user=user).distinct()
+        else:
+            return Order.objects.none()
+
+    @action(detail=True, methods=['patch'], url_path='update-status')
+    def update_status(self, request, pk=None):
+        try:
+            order = Order.objects.get(pk=pk)
+        except Order.DoesNotExist:
+            return Response({"error": "Order not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        new_status = request.data.get('status')
+        if new_status not in ['Pending', 'Shipped', 'Delivered', 'Cancelled']:
+            return Response({"error": "Invalid status provided."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if order.status == 'Shipped' and new_status != 'Shipped':
+            self.restore_stock(order)
+
+        if new_status == 'Shipped':
+            self.decrease_stock(order)
+
+        if new_status == 'Cancelled':
+            self.restore_stock(order)
+
+        order.status = new_status
+        order.save()
+
+        return Response({
+            "status": "Order status updated successfully",
+            "order_id": order.id,
+            "new_status": order.status
+        }, status=status.HTTP_200_OK)
+
+    def decrease_stock(self, order):
+        for item in order.items.all():
+            if item.product.stock < item.quantity:
+                raise ValueError(f"Insufficient stock for product '{item.product.name}'")
+            item.product.stock -= item.quantity
+            item.product.save()
+
+    def restore_stock(self, order):
+        for item in order.items.all():
+            item.product.stock += item.quantity
+            item.product.save()
+
+class CartViewSet(viewsets.ViewSet): 
     permission_classes = [IsAuthenticated]
 
     def list(self, request):
@@ -263,6 +370,43 @@ class CartViewSet(viewsets.ViewSet):
             return Response({"status": "Product removed from cart"}, status=status.HTTP_200_OK)
         except CartItem.DoesNotExist:
             return Response({"error": "Product not in cart"}, status=status.HTTP_404_NOT_FOUND)
+        
+    @action(detail=False, methods=['post'])
+    def checkout(self, request):
+        customer = Customer.objects.get(user=request.user)
+        cart = Cart.objects.get(customer=customer)
+        cart_items = CartItem.objects.filter(cart=cart)
+
+        if not cart_items.exists():
+            return Response({"error": "Cart is empty"}, status=status.HTTP_400_BAD_REQUEST)
+        
+        payment_method = request.data.get("payment_method", "Cash on Delivery")
+
+        order = Order.objects.create(customer=customer, payment_method="Cash on Delivery", status="Pending")
+        for item in cart_items:
+            OrderItem.objects.create(
+                order=order,
+                product=item.product,
+                quantity=item.quantity,
+               
+            )
+    
+        cart_items.delete()
+
+        return Response({
+            "status": "Checkout successful",
+            "order_id": order.id,
+            "message": f"Your order has been placed with {payment_method}"
+        }, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=['get'])
+    def view_orders(self, request):
+        orders_url = request.build_absolute_uri('/api/orders/') 
+        return Response({
+            "message": "Click the link below to view your orders.",
+            "orders_url": orders_url
+        })
+
 
 class CartItemViewSet(viewsets.ModelViewSet):
     serializer_class = CartItemSerializer
@@ -284,7 +428,7 @@ class CartItemViewSet(viewsets.ModelViewSet):
     #return render(request,"index.html")
 
 class CompanySignupView(APIView):
-    permission_classes = [AllowAny]  
+    permission_classes = [AllowAny] 
     def post(self,request,*args,**kwargs):
         serializer = CompanySignupSerializer(data=request.data)
         if serializer.is_valid():
@@ -302,23 +446,24 @@ class CustomerSignupView(APIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 class LoginView(APIView):
-    permission_classes = [AllowAny]  
+    permission_classes = [AllowAny]
+
     def post(self, request):
         serializer = LoginSerializer(data=request.data)
         if serializer.is_valid():
             user = serializer.validated_data['user']
-
-            # Generate JWT tokens for the authenticated user
+            user_type = serializer.validated_data['user_type'] 
             refresh = RefreshToken.for_user(user)
             access_token = str(refresh.access_token)
 
-            # Determine the user type and redirect path
-            if hasattr(user, 'company'):
-                redirect_url = '/api/companies/'
-            elif hasattr(user, 'customer'):
-                redirect_url = '/api/customers/'
+            if user.is_superuser:
+                redirect_url = '/admin/dashboard/' 
+            elif user_type == 'company':  # Check if the user is a company
+                redirect_url = '/company/dashboard/'
+            elif user_type == 'customer':  # Check if the user is a customer
+                redirect_url = '/customer/dashboard/'
             else:
-                redirect_url = '/admin/'
+                redirect_url = '/api/default/'
 
             return Response({
                 "message": "Login successful",

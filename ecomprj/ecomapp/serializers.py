@@ -6,7 +6,7 @@ from django.contrib.auth import authenticate
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
-        fields = ['id', 'username', 'email']
+        fields = [ 'id','username', 'email']
 
 class CompanySignupSerializer(serializers.Serializer):
     user = UserSerializer(write_only=True)
@@ -31,7 +31,7 @@ class CompanySignupSerializer(serializers.Serializer):
             password=validated_data.pop('password')
         )
         company = Company.objects.create(user=user, **validated_data)
-        return user
+        return company
 
 class CustomerSignupSerializer(serializers.Serializer):
     user = UserSerializer(write_only=True)
@@ -54,7 +54,7 @@ class CustomerSignupSerializer(serializers.Serializer):
             password=validated_data.pop('password')
         )
         customer = Customer.objects.create(user=user, **validated_data)
-        return user
+        return customer
 
 class LoginSerializer(serializers.Serializer):
     username = serializers.CharField(required=True)
@@ -64,11 +64,23 @@ class LoginSerializer(serializers.Serializer):
         username = data.get("username")
         password = data.get("password")
         user = authenticate(username=username, password=password)
+
         if user is None:
             raise serializers.ValidationError("Invalid username or password.")
         if not user.is_active:
             raise serializers.ValidationError("User account is deactivated.")
-        return {'user': user}  # Return the user object
+
+        if hasattr(user, 'company') and user.company is not None:
+            user_type = 'company'
+        elif hasattr(user, 'customer') and user.customer is not None:
+            user_type = 'customer'
+        else:
+            raise serializers.ValidationError("User profile not found.")
+        
+        return {
+            'user': user,
+            'user_type': user_type  
+        }
 
 class CompanySerializer(serializers.ModelSerializer):
     user = UserSerializer(read_only=True)
@@ -103,7 +115,7 @@ class ProductSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Product
-        fields = ['id', 'name', 'price', 'company_name', 'sizes']
+        fields = ['id', 'name', 'price', 'company_name','sizes','stock_quantity']
 
        
 class OrderItemSerializer(serializers.ModelSerializer):
