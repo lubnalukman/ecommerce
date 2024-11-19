@@ -2,6 +2,8 @@ from rest_framework import serializers
 from .models import *
 from django.contrib.auth.models import User
 from django.contrib.auth import authenticate
+from .tasks import send_signup_email
+from .tasks import *
 
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
@@ -31,6 +33,7 @@ class CompanySignupSerializer(serializers.Serializer):
             password=validated_data.pop('password')
         )
         company = Company.objects.create(user=user, **validated_data)
+        send_signup_email(user.email, user.username)
         return company
 
 class CustomerSignupSerializer(serializers.Serializer):
@@ -54,6 +57,7 @@ class CustomerSignupSerializer(serializers.Serializer):
             password=validated_data.pop('password')
         )
         customer = Customer.objects.create(user=user, **validated_data)
+        send_signup_email.delay(user.email, user.username)
         return customer
 
 class LoginSerializer(serializers.Serializer):

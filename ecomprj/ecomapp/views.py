@@ -57,7 +57,7 @@ class CustomerDashboardView(APIView):
     
 class CompanyDashboardView(APIView):
     def get(self, request):
-        if  notself.request.user.is_authenticated and hasattr(self.request.user, 'company'):
+        if  not self.request.user.is_authenticated and hasattr(self.request.user, 'company'):
             return Response(
                 {"error": "You do not have permission to access this resource."},
                 status=status.HTTP_403_FORBIDDEN
@@ -304,6 +304,7 @@ class OrderViewSet(viewsets.ModelViewSet):
 
         if new_status == 'Shipped':
             self.decrease_stock(order)
+            notify_customer(order)
 
         if new_status == 'Cancelled':
             self.restore_stock(order)
@@ -390,7 +391,8 @@ class CartViewSet(viewsets.ViewSet):
                 quantity=item.quantity,
                
             )
-    
+            
+        notify_company(order)
         cart_items.delete()
 
         return Response({
